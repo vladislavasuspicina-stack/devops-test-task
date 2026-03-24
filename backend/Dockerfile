@@ -1,27 +1,20 @@
-# Multi-stage build for minimal image size
-FROM python:3.11-slim as runtime
+# Базовый образ - python slim для меньшего размера
+FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser
+# Создаем обычного пользователя для безопасности
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
-# Copy application
 COPY app.py .
 
-# Change ownership to non-root user
-RUN chown -R appuser:appuser /app
-
-# Switch to non-root user
+# Переключаемся на non-root пользователя
 USER appuser
 
-# Expose port (documentation, not published)
 EXPOSE 8080
 
-# Health check
+# Health check для docker-compose - так он знает когда сервис готов
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD python3 -c "import http.client; http.client.HTTPConnection('localhost', 8080).request('GET', '/'); exit(0)" || exit 1
 
-# Run application
 CMD ["python3", "app.py"]

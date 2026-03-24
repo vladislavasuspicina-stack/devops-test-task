@@ -6,12 +6,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: devops-backend
-    # Port not exposed to host - only accessible through docker network
+    # expose - не открываем на хост, только для docker сети
     expose:
       - "8080"
     networks:
       - app-network
     restart: unless-stopped
+    # Health check - нужно чтобы nginx ждал пока backend готов
     healthcheck:
       test: ["CMD", "python3", "-c", "import http.client; http.client.HTTPConnection('localhost', 8080).request('GET', '/'); exit(0)"]
       interval: 10s
@@ -20,13 +21,14 @@ services:
       start_period: 5s
 
   nginx:
-    image: nginx:1.25-alpine
+    image: nginx:1.25-alpine  # alpine = меньше размер, быстрее
     container_name: devops-nginx
     ports:
-      - "80:80"
+      - "80:80"  # только этот порт видит пользователь
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro  # ro = read-only
     depends_on:
+      # ждем пока бек станет healthy перед запуском nginx
       backend:
         condition: service_healthy
     networks:
@@ -40,5 +42,6 @@ services:
       start_period: 5s
 
 networks:
+  # Отдельная сеть для контейнеров - так они видят друг друга по имени сервиса
   app-network:
     driver: bridge

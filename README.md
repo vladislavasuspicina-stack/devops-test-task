@@ -1,116 +1,131 @@
-# DevOps Test Task - Simple Web Application with Docker
+# DevOps Test Task
 
-Простое веб-приложение, развернутое в Docker контейнерах с nginx в качестве reverse proxy.
+Простое веб-приложение с nginx reverse proxy за Docker Compose. Backend на Python, nginx только проксирует запросы.
 
-## Архитектура
+## Архитектура (как это работает)
 
 ```
-┌─────────────────────────────────────────────┐
-│            Host (localhost)                 │
-│                                             │
-│  ┌───────────────────────────────────────┐  │
-│  │     Docker Network: app-network       │  │
-│  │                                       │  │
-│  │  ┌──────────────┐   ┌──────────────┐ │  │
-│  │  │              │   │              │ │  │
-│  │  │  nginx:80    │──→│ backend:8080 │ │  │
-│  │  │  (reverse    │   │ (Python HTTP)│ │  │
-│  │  │   proxy)     │   │              │ │  │
-│  │  │              │   │              │ │  │
-│  │  └──────────────┘   └──────────────┘ │  │
-│  │        ↑                              │  │
-│  └────────┼──────────────────────────────┘  │
-│           │                                 │
-│      :80  │  (published)                    │
-│                                             │
-└─────────────────────────────────────────────┘
+curl http://localhost
+         ↓
+Machine:80 → Docker:80 (nginx)
+         ↓
+nginx читает конфиг и перенаправляет на backend
+         ↓
+nginx → backend:8080 (Python HTTP server)
+         ↓
+Python ответит "Hello from Effective Mobile!"
+         ↓
+nginx передает ответ обратно
 ```
+
+Docker Compose это всё оркеструет - создает сеть, поднимает контейнеры, дождется пока backend готов.
 
 ## Компоненты
 
 ### Backend
-- **Язык:** Python 3.11
-- **Фреймворк:** `http.server` (встроенный модуль)
-- **Порт:** 8080 (только внутри Docker сети)
-- **Ответ:** "Hello from Effective Mobile!" на GET /
+- **Python 3.11** slim образ (выбрал slim версию - меньше места)
+- **http.server** встроенный модуль (не хотелось лишних зависимостей типа Flask)
+- Слушает **:8080** но только в docker сети (для nginx видно)
+- На **GET /** отвечает текстом "Hello from Effective Mobile!"
+- Запускается от обычного пользователя (не root)
 
 ### Nginx
-- **Образ:** `nginx:1.25-alpine`
-- **Порт:** 80 (опубликован на хост)
-- **Роль:** Reverse proxy к backend
-- **Конфигурация:** `./nginx/nginx.conf`
+- **nginx:1.25-alpine** (alpine - компактный, быстрый)
+- Слушает **:80** - это открыто на хост (пользователь видит)
+- **Reverse proxy** - направляет запросы на backend через Docker DNS
+- Конфиг подключается через volume (читай только)
+- Дождется пока backend healthy прежде чем начать работать
 
 ## Требования
 
-- Docker 20.10+
-- Docker Compose 2.0+
+- Docker (с поддержкой Linux, даже на Windows/Mac значит Docker Desktop)
+- Docker Compose v2+
+- Минимум 2 Гб free memory (но кстати очень мало весит)
 
 ## Установка и запуск
 
-### 1. Клонирование репозитория
+### 1. Клонируем репо
 
 ```bash
 git clone https://github.com/<your-username>/devops-test-task.git
 cd devops-test-task
 ```
 
-### 2. Запуск контейнеров
+### 2. Поднимаем контейнеры
 
 ```bash
 docker-compose up -d
 ```
 
-Команда запустит:
-- `devops-backend` - Python приложение на порту 8080
-- `devops-nginx` - Nginx reverse proxy на порту 80
+Добавим `-d` флаг чтоб работал в фоне. Компоуз создаст:
+- Backend контейнер (bilding из Dockerfile)
+- Nginx контейнер
+- Docker сеть
+- Volume для конфига nginx
 
-### 3. Проверка статуса
+### 3. Ждем когда backend поднялся
 
 ```bash
 docker-compose ps
 ```
 
-Оба контейнера должны иметь статус "healthy" после инициализации.
+Оба контейнера должны быть "healthy". Если нет - смотрим логи:
 
-## Проверка результата
+## Проверка
 
-### Тестирование локально
+### Основная проверка
 
 ```bash
 curl http://localhost
 ```
 
-**Ожидаемый ответ:**
+Должна вернуться строка:
 ```
 Hello from Effective Mobile!
 ```
 
-### Альтернативные способы проверки
-
-Через wget:
+Если не поднялось - проверяем логи:
 ```bash
-wget -q -O - http://localhost
+docker-compose logs
 ```
 
-Через Docker Compose:
-```bash
-docker-compose exec nginx wget -q -O - http://backend:8080/
-```
+### Смотреть логи в реальном времени
 
-Просмотр логов:
 ```bash
 docker-compose logs -f
 ```
 
-## Как работает схема
+Видно будет и логи nginx и логи Python сервера.
 
-1. **Запрос от пользователя:** `curl http://localhost` отправляет HTTP запрос на порт 80
-2. **Nginx обработка:** Nginx получает запрос и смотрит конфигурацию
-3. **Upstream resolution:** В `nginx.conf` определен `upstream backend` с адресом `backend:8080`
-4. **Service discovery:** Docker DNS разрешает имя сервиса `backend` в IP контейнера
-5. **Проксирование:** Nginx проксирует запрос к контейнеру backend на порт 8080
-6. **Ответ приложения:** Python сервер отвечает "Hello from Effective Mobile!"
-7. **Возврат ответа:** Nginx возвращает ответ обратно клиенту
+### Проверить конкретный контейнер
+
+```bash
+# Только backend
+docker-compose logs backend -f
+
+# Только nginx  
+docker-compose logs nginx -f
+```
+
+## Как работает
+
+**Цепочка запроса:**
+
+1. Пользователь делает `curl http://localhost` (или открывает в браузере)
+2. Запрос идет на порт 80 машины
+3. Docker перенаправляет на контейнер nginx:80
+4. Nginx смотрит конфиг (`nginx/nginx.conf`)
+5. В конфиге определен `upstream backend` с адресом `backend:8080`
+6. Docker DNS резолвит имя сервиса `backend` в IP контейнера
+7. Nginx проксирует запрос внутри docker сети на `backend:8080`
+8. Python server получает запрос на `/`, проверяет path и отвечает
+9. Ответ идет обратно в nginx
+10. Nginx отправляет клиенту
+
+**Зачем это нужно:**
+- Backend НЕ виден на машине - это безопасно
+- Nginx видит backend по DNS имени (не нужно IP)
+- Docker Compose управляет всем (порты, сеть, dependencies)
 
 ## Остановка
 
@@ -118,92 +133,100 @@ docker-compose logs -f
 docker-compose down
 ```
 
-## Очистка (включая образы)
+Это **не удалит** volume'ы или образы, просто остановит контейнеры.
+
+## Полная очистка
 
 ```bash
 docker-compose down --rmi all
 ```
 
+Это удалит и образы и контейнеры и сеть. Данные сохранятся только в volume'ах если они были.
+
 ## Технологии
 
-- **Docker** - контейнеризация
-- **Docker Compose** - оркестрация контейнеров
-- **Python 3.11** - backend приложение
-- **Nginx 1.25 Alpine** - reverse proxy
-- **HTTP/1.1** - протокол взаимодействия
+- **Docker** - контейнеризация приложений
+- **Docker Compose** - управление контейнерами (оркестрация)
+- **Python 3.11** - язык для backend
+- **Nginx 1.25** - reverse proxy / веб-сервер
+- **Alpine Linux** (в nginx) - мини линукс для контейнеров
 
-## Особенности реализации
+## Осбенности (что я учел)
 
-### Безопасность
-- Backend запускается от non-root пользователя (appuser)
-- Backend не опубликован на хост - доступен только из Docker сети
-- Nginx конфигурация подключена как read-only volume
+**Безопасность:**
+- Backend запускается от обычного юзера `appuser` (не root)
+- Backend НЕ открыт на хост вообще
+- Nginx конфиг подключен read-only
+- Только nginx порт 80 видит машине
 
-### Оптимизация
-- Использование `python:3.11-slim` для минимизации размера образа
-- Multi-stage build для базовой оптимизации
-- Alpine Linux для nginx (легкий образ)
-- Автоматическое масштабирование worker процессов
+**Оптимизация:**
+- Slim образ (не full Python, который гораздо больше)
+- Alpine для nginx (очень легкий)
+- Минимальнах зависимостей
 
-### Надежность
-- Health checks для обоих сервисов
-- Зависимость nginx от healthy backend (`depends_on`)
-- Automatic restart политика (`unless-stopped`)
-- Explicit network (`app-network`)
+**Надежность:**
+- Health checks на обоих контейнерах
+- Docker Compose дождется пока backend healthy перед nginx
+- Auto-restart если что-то упадет
+- Explicit network для сервисов
 
-### Конфигурация
-- Правильная передача заголовков (Host, X-Real-IP, X-Forwarded-For)
-- Оптимальные timeout'ы
-- Graceful shutdown
+**Конфиг:**
+- Правильные proxy заголовки (Host, X-Real-IP, X-Forwarded-For)
+- Нормальные timeout'ы
+- Логирование работает
 
 ## Структура проекта
 
 ```
 devops-test-task/
-├── backend/
-│   ├── Dockerfile       # Конфигурация контейнера backend
-│   └── app.py          # Python HTTP сервер
-├── nginx/
-│   └── nginx.conf      # Конфигурация nginx reverse proxy
-├── docker-compose.yml  # Оркестрация контейнеров
-├── .gitignore         # Файлы для игнорирования в git
-├── README.md          # Этот файл
-└── LICENSE            # Лицензия проекта
+├── backend/              # Python приложение
+│   ├── Dockerfile       # Образ для backend
+│   └── app.py           # HTTP сервер на Python
+├── nginx/               # Nginx конфиг
+│   └── nginx.conf       # Настройки reverse proxy
+├── docker-compose.yml   # Оркестрация
+├── README.md            # Этот файл
+├── .gitignore          # Что не коммитить в git
+├── test.sh             # Тест для Linux/Mac
+└── test.bat            # Тест для Windows
 ```
 
-## Решение проблем
+## Проблемы и решение
 
-### Порт 80 занят
-
-```bash
-# Замените порт в docker-compose.yml
-# ports:
-#   - "8000:80"
-docker-compose up -d
-curl http://localhost:8000
+**Q: Порт 80 уже занят**
+A: Используй другой порт в docker-compose.yml:
+```yaml
+ports:
+  - "8000:80"  # теперь доступно на :8000
 ```
+Потом `curl http://localhost:8000`
 
-### Backend недоступен из nginx
-
-Проверьте имя сервиса и порт в `nginx.conf`:
-```nginx
-upstream backend {
-    server backend:8080;  # backend - имя сервиса, 8080 - порт
-}
-```
-
-### Health check не проходит
-
-Проверьте логи:
+**Q: Backend не отвечает**
+A: Проверяем логи:
 ```bash
 docker-compose logs backend
-docker-compose logs nginx
 ```
 
-## Лицензия
+**Q: Health check'и падают**
+A: Может быть контейнеры еще стартуют. Пробуем еще раз через 10 секунд:
+```bash
+docker-compose down && docker-compose up -d
+```
 
-MIT
+**Q: Permission denied на nginx конфиг**
+A: Проверяем что конфиг существует:
+```bash
+ls -la nginx/nginx.conf
+```
+Если файла нет - что-то с клонированием репо
 
-## Автор
+## Notes
 
-DevOps Test Task решение
+- Я выбрал Python с `http.server` потому что это встроено и не нужны зависимости
+- Nginx slim image экономит место (важно если много контейнеров)
+- Health checks помогают Docker понять когда сервис готов
+- Docker Compose DNS очень удобно - не нужно IP адреса хардкодить
+
+---
+
+Made with ❤️ for Effective Mobile
